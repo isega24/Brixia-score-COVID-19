@@ -55,15 +55,15 @@ def BSNet(backbone_name='resnet18',
           classes=4,
           activation='sigmoid',
           load_seg_model=True,
-          seg_model_weights='./weights/segmentation-model.h5',
+          seg_model_weights='./src/BSNet/weights/segmentation-model.h5',
           freeze_segmentation=True,
           load_align_model=True,
-          align_model_weights='./weights/alignment-model.h5',
+          align_model_weights='./src/BSNet/weights/alignment-model.h5',
           freeze_align_model=True,
           pretrain_aligment_net=False,
           explict_self_attention=True,
           load_bscore_model=True,
-          bscore_model_weights='./weights/bscore-model.h5'
+          bscore_model_weights='./src/BSNet/weights/bscore-model.h5'
           ):
     """
 

@@ -9,6 +9,7 @@ The segmentation dataset is created with these chest x-rays datasets:
                         http://db.jsrt.or.jp/eng.php
 """
 import warnings
+import shutil
 import albumentations as alb
 import io
 import cv2
@@ -18,6 +19,7 @@ from pathlib import Path
 from skimage import io, exposure
 from tqdm.auto import tqdm
 import argparse
+import os
 from .ImageDataAugmentor.image_data_augmentator import ImageDataAugmentor
 from .utils import preprocess, load_image, add_suffix
 
@@ -146,25 +148,54 @@ def train_generator(train_path, config=default_config):
     return zip(image_generator, mask_generator)
 
 
-def val_generator(test_files, config=default_config):
+def val_generator(test_path, config=default_config):
     """
-    generate the validation set
-    :param test_files: segmentation dataset test path
-    :param config: configuration parameters. Config parameters are (target_size, enable_preprocessing)
+    Create a generator with the training data. It includes an online-augmentation.
+    :param train_path: segmentation dataset train path
+    :param config: configuration dictionary.
     :return: keras image generator
     """
-    X = []
-    y = []
-    for test_file in test_files:
-        img = load_image(test_file.as_posix(), config["target_size"])[:, :, 0]
+
+    def adjust_data(mask):
+        mask[mask > 0.5] = 1
+        mask[mask <= 0.5] = 0
+        mask = np.expand_dims(mask, axis=-1).astype('float')
+        return mask
+
+    def image_preprocess(img):
         if config["enable_preprocessing"]:
             img = preprocess(img)
-        X.append(img)
-        y.append(
-            load_image(add_suffix(test_file.as_posix(), "mask"),
-                       target_size=config["target_size"]))
-    return np.array(X).reshape((-1, config["target_size"], config["target_size"], 1)), \
-           np.array(y).reshape((-1, config["target_size"], config["target_size"], 1))
+        return np.expand_dims(img, axis=-1)
+
+    image_datagen = ImageDataAugmentor(
+        rescale=1. / 255,
+        preprocess_input=image_preprocess)
+
+    mask_datagen = ImageDataAugmentor(preprocess_input=adjust_data,
+                                      augment_seed=config["seed"],
+                                      augment_mode="mask")
+
+    image_generator = image_datagen.flow_from_directory(
+        test_path,
+        classes=[config["image_save_prefix"]],
+        class_mode=None,
+        color_mode='gray',
+        target_size=(config["target_size"], config["target_size"]),
+        batch_size=config["batch_size"],
+        save_to_dir=False,
+        seed=config["seed"])
+
+    mask_generator = mask_datagen.flow_from_directory(
+        test_path,
+        classes=[config["mask_save_prefix"]],
+        class_mode=None,
+        color_mode='gray',
+        target_size=(config["target_size"], config["target_size"]),
+        batch_size=config["batch_size"],
+        save_to_dir=False,
+        seed=config["seed"])
+
+    return zip(image_generator, mask_generator)
 
 
 def get_data(config=default_config):
@@ -220,12 +251,7 @@ def get_data(config=default_config):
     sm = len(list(segmentation_mask_dir.glob('*')))
     if si == sm and si > 0:
         tr = train_generator(segmentation_train_dir, config=config)
-
-        val_files = [test_file for test_file in segmentation_test_dir.glob("*.png")
-                     if ("_mask" not in test_file.name and "_dilate" not in test_file.name and
-                         "_predict" not in test_file.name)
-                     ]
-        val = val_generator(val_files, config=config)
+        val = val_generator(segmentation_test_dir, config=config)
         return tr, val
     else:
         print("Something goes wrong. I cannot find the dataset.")
@@ -321,8 +347,8 @@ def prepare_montgomery(m_image_dir, m_left_mask_dir, m_right_mask_dir,
         right_image_file = m_right_mask_dir / base_file
 
         image = cv2.imread(image_file.as_posix())
-        left_mask = cv2.imread(left_image_file, cv2.IMREAD_GRAYSCALE)
-        right_mask = cv2.imread(right_image_file, cv2.IMREAD_GRAYSCALE)
+        right_mask = cv2.imread(str(right_image_file), cv2.IMREAD_GRAYSCALE)
+        left_mask = cv2.imread(str(left_image_file), cv2.IMREAD_GRAYSCALE)
 
         image = cv2.resize(image, (image_size, image_size))
         left_mask = cv2.resize(left_mask, (image_size, image_size))
@@ -336,35 +362,87 @@ def prepare_montgomery(m_image_dir, m_left_mask_dir, m_right_mask_dir,
             cv2.imwrite((segmentation_mask_dir / base_file).as_posix(),
                         mask)
         else:
-            cv2.imwrite((segmentation_test_dir / base_file).as_posix(),
+            cv2.imwrite((segmentation_test_dir / "image" / base_file).as_posix(),image)
+            cv2.imwrite((segmentation_test_dir / "mask" / base_file).as_posix(),mask)
+
+def prepare_lung_database(m_image_dir, m_mask_dir,
+                       segmentation_image_dir, segmentation_mask_dir,
+                       segmentation_test_dir, image_size=512):
+    lung_mask = list(m_mask_dir.glob('*.png'))
+    lung_train = lung_mask[int(0.2*len(lung_mask)):]
+
+    for image_file in tqdm(lung_mask):
+        base_file = image_file.name
+        image_file_initial = image_file
+        image_file = m_image_dir / base_file
+        mask_file = m_mask_dir / base_file
+
+        if not os.path.isfile(image_file):
+            image_file = str(image_file).replace("_mask","")
+
+        if not os.path.isfile(mask_file):
+            mask_file = str(mask_file).replace(".png","_mask.png")
+
+
+        image = cv2.imread(str(image_file))
+        mask = cv2.imread(str(mask_file), cv2.IMREAD_GRAYSCALE)
+
+        image = cv2.resize(image, (image_size, image_size))
+        mask = cv2.resize(mask, (image_size, image_size))
+
+        if image_file_initial in lung_train:
+            cv2.imwrite((segmentation_image_dir / base_file).as_posix(),
                         image)
-            cv2.imwrite((segmentation_test_dir / f"{base_file.stem}_mask{base_file.stem}").as_posix(),
+            cv2.imwrite((segmentation_mask_dir / base_file).as_posix(),
                         mask)
+        else:
+            cv2.imwrite((segmentation_test_dir / "image" / base_file).as_posix(),image)
+            cv2.imwrite((segmentation_test_dir / "mask" / base_file).as_posix(),mask)
+
 
 
 def preapre_dataset(input_folder=SEGMENTATION_SOURCE_DIR, output_folder=OUTPUT_DIR, image_size=None,
-                    force_reset=False):
+                    force_reset=True):
     segmentation_test_dir = output_folder / "segmentation" / "test"
     segmentation_train_dir = output_folder / "segmentation" / "train"
     segmentation_image_dir = segmentation_train_dir / "image"
     segmentation_mask_dir = segmentation_train_dir / "mask"
+    segmentation_image_dir_val = segmentation_test_dir / "image"
+    segmentation_mask_dir_val = segmentation_test_dir / "mask"
 
     if force_reset:
         print("Cleaning dataset...")
-        os.rmdir(segmentation_image_dir)
-        os.rmdir(segmentation_mask_dir)
-        os.rmdir(segmentation_test_dir)
+        shutil.rmtree(segmentation_image_dir)
+        shutil.rmtree(segmentation_mask_dir)
+        shutil.rmtree(segmentation_test_dir)
 
     # Create folder structure
     os.makedirs(segmentation_image_dir, exist_ok=True)
     os.makedirs(segmentation_mask_dir, exist_ok=True)
     os.makedirs(segmentation_test_dir, exist_ok=True)
+    os.makedirs(segmentation_image_dir_val, exist_ok=True)
+    os.makedirs(segmentation_mask_dir_val, exist_ok=True)
 
     si = len(list(segmentation_image_dir.glob('*')))
     sm = len(list(segmentation_mask_dir.glob('*')))
     if si == sm and si > 0:
         print(f"Segmentation images and mask already extracted ({si} items)")
         return
+
+    print("Extract Lung Dataset")
+    lung_dir = input_folder / "LungSegmentation"
+    lung_image_dir = lung_dir / "CXR_png"
+    lung_mask_dir = lung_dir / "masks"
+    
+    if len(list(lung_image_dir.glob('*'))) > 0:
+        prepare_lung_database(lung_image_dir,
+                     lung_mask_dir,
+                     segmentation_image_dir=segmentation_image_dir,
+                     segmentation_mask_dir=segmentation_mask_dir,
+                     segmentation_test_dir=segmentation_test_dir,
+                     image_size=image_size)
+    else:
+        print(f"The lung dataset is not present, or in a different position. {jsrt_image_dir} is empty or not exist.")
 
     print("Extract Montgomery")
     montgomery_train_dir = input_folder / "MontgomerySet"
@@ -417,6 +495,9 @@ def preapre_dataset(input_folder=SEGMENTATION_SOURCE_DIR, output_folder=OUTPUT_D
                      image_size=image_size)
     else:
         print(f"The JSRT dataset is not present, or in a different position. {jsrt_image_dir} is empty or not exist.")
+    
+
+    
 
 
 def get_arguments():
