@@ -86,7 +86,7 @@ def from_4D_image(image, ndims):
             return image
 
 
-@tf.function
+#@tf.function
 def equalize_image_gray(image, data_format="channels_last"):
     """Implements Equalize function from PIL using TF ops."""
 
@@ -136,7 +136,7 @@ def equalize_image_gray(image, data_format="channels_last"):
     return image
 
 
-@tf.function
+#@tf.function
 def equalize(image, data_format="channels_last"):
     """Equalize image(s)
     Args:

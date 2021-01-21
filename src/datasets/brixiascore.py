@@ -65,8 +65,11 @@ def get_data_iterator(target_size=512, test_size=0.25, random_state=23,preproces
         X.append(imageFile)
         y.append(bs)
     
+    XTrain, XTest, YTrain, YTest = train_test_split(X, y, test_size=test_size, random_state=random_state)
+    
 
-    DS = tf.data.Dataset.from_tensor_slices((X,y))
+    DSTrain = tf.data.Dataset.from_tensor_slices((XTrain,YTrain))
+    DSTest = tf.data.Dataset.from_tensor_slices((XTest,YTest))
     def decode_img(img_path):
         image_bytes = tf.io.read_file(img_path)
         img = tfio.image.decode_dicom_image(image_bytes)
@@ -75,10 +78,13 @@ def get_data_iterator(target_size=512, test_size=0.25, random_state=23,preproces
         return tf.image.resize(img, [img_height, img_width])
 
 
-    DS.shuffle(buffer_size=BUFFER_SIZE)
-    DS = DS.map(lambda x_,y_: (decode_img(x_)[0,:,:],y_))
-    DS = DS.batch(BATCH_SIZE)
+    DSTrain.shuffle(buffer_size=BUFFER_SIZE)
+    DSTest.shuffle(buffer_size=BUFFER_SIZE)
+    DSTrain = DSTrain.map(lambda x_,y_: (decode_img(x_)[0,:,:],y_))
+    DSTest = DSTest.map(lambda x_,y_: (decode_img(x_)[0,:,:],y_))
+    DSTrain = DSTrain.batch(BATCH_SIZE)
+    DSTest = DSTest.batch(BATCH_SIZE)
 
     
-    return DS
+    return DSTrain, DSTest
     

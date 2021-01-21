@@ -15,6 +15,7 @@ import io
 import cv2
 import numpy as np
 import os
+import tensorflow as tf
 from pathlib import Path
 from skimage import io, exposure
 from tqdm.auto import tqdm
@@ -60,6 +61,11 @@ default_config = {
     'augm_scale_limit': 0.1,
     'augm_rotate_limit': 20,
 }
+def adjust_data(mask):
+    mask[mask > 0.5] = 1
+    mask[mask <= 0.5] = 0
+    mask = np.expand_dims(mask, axis=-1).astype('float')
+    return mask
 
 
 def train_generator(train_path, config=default_config):
@@ -69,13 +75,6 @@ def train_generator(train_path, config=default_config):
     :param config: configuration dictionary.
     :return: keras image generator
     """
-
-    def adjust_data(mask):
-        mask[mask > 0.5] = 1
-        mask[mask <= 0.5] = 0
-        mask = np.expand_dims(mask, axis=-1).astype('float')
-        return mask
-
     augm = alb.Compose([
         alb.HorizontalFlip(),
         alb.OneOf([
@@ -86,26 +85,26 @@ def train_generator(train_path, config=default_config):
             p=config["augm_p_corrections"]),
         alb.OneOf([
             alb.Blur(blur_limit=4, p=config["augm_p_blur"]),
-            alb.MotionBlur(blur_limit=4, p=config["augm_p_motionblur"]),
-            alb.MedianBlur(blur_limit=4, p=config["augm_p_medianblur"])
+            alb.MotionBlur(blur_limit=5, p=config["augm_p_motionblur"]),
+            alb.MedianBlur(blur_limit=5, p=config["augm_p_medianblur"])
         ],
             p=config["augm_p_blurs"]),
         alb.OneOf([
             alb.ElasticTransform(alpha=60,
-                                 sigma=60 * 0.20,
-                                 alpha_affine=60 * 0.03,
-                                 p=config["augm_p_elastic"]),
+                                sigma=60 * 0.20,
+                                alpha_affine=60 * 0.03,
+                                p=config["augm_p_elastic"]),
             alb.GridDistortion(p=config["augm_p_grid"]),
             alb.OpticalDistortion(
                 distort_limit=0.2, shift_limit=0.05, p=config["augm_p_optical"]),
         ],
             p=config["augm_p_distortions"]),
         alb.ShiftScaleRotate(shift_limit=config["augm_shift_limit"],
-                             scale_limit=config["augm_scale_limit"],
-                             rotate_limit=config["augm_rotate_limit"],
-                             interpolation=cv2.INTER_LINEAR,
-                             border_mode=cv2.BORDER_CONSTANT,
-                             p=config["augm_p_shiftscalrot"]),
+                            scale_limit=config["augm_scale_limit"],
+                            rotate_limit=config["augm_rotate_limit"],
+                            interpolation=cv2.INTER_LINEAR,
+                            border_mode=cv2.BORDER_CONSTANT,
+                            p=config["augm_p_shiftscalrot"]),
         alb.Resize(config["target_size"], config["target_size"]),
     ])
 
@@ -148,6 +147,7 @@ def train_generator(train_path, config=default_config):
     return zip(image_generator, mask_generator)
 
 
+
 def val_generator(test_path, config=default_config):
     """
     Create a generator with the training data. It includes an online-augmentation.
@@ -156,11 +156,9 @@ def val_generator(test_path, config=default_config):
     :return: keras image generator
     """
 
-    def adjust_data(mask):
-        mask[mask > 0.5] = 1
-        mask[mask <= 0.5] = 0
-        mask = np.expand_dims(mask, axis=-1).astype('float')
-        return mask
+    augm = alb.Compose([
+        alb.Resize(config["target_size"], config["target_size"]),
+    ])
 
     def image_preprocess(img):
         if config["enable_preprocessing"]:
@@ -169,9 +167,12 @@ def val_generator(test_path, config=default_config):
 
     image_datagen = ImageDataAugmentor(
         rescale=1. / 255,
-        preprocess_input=image_preprocess)
+        augment=augm,
+        preprocess_input=image_preprocess,
+        augment_seed=config["seed"])
 
-    mask_datagen = ImageDataAugmentor(preprocess_input=adjust_data,
+    mask_datagen = ImageDataAugmentor(augment=augm,
+                                      preprocess_input=adjust_data,
                                       augment_seed=config["seed"],
                                       augment_mode="mask")
 
