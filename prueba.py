@@ -9,9 +9,11 @@ import tensorflow as tf
 
 # Check the docsting for additional info
 
-DSBrixiaTrain, DSBrixiaTest = brixiascore.get_data_iterator(file_csv="data/metadata_global_v2.csv",data_directory="data/dicom_clean",preprocessing=True)
+DSBrixiaTrain, DSBrixiaTest = brixiascore.get_data_iterator_png(file_csv="data/metadata_global_v2.csv",data_directory="data/png_resized",preprocessing=True)
 
-DSSegmentationTrain, DSSegmentationVal  = lung_segmentation.get_data()
+
+
+#DSSegmentationTrain, DSSegmentationVal  = lung_segmentation.get_data()
 
 
 
@@ -24,7 +26,7 @@ models = BSNet(seg_model_weights=segmentation_checkpoint,
     bscore_model_weights=brixia_checkpoint,
     load_align_model=True,
     load_seg_model=True,
-    load_bscore_model=True,
+    load_bscore_model=False,
     freeze_segmentation=False,
     freeze_encoder=False,
     freeze_align_model=False)
@@ -35,7 +37,7 @@ alignment_model = models[1]
 brixia_model = models[2]
 
 adam = tf.keras.optimizers.Adam(
-    learning_rate=0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-07, amsgrad=False, name="AdamW")
+    learning_rate=0.03, beta_1=0.9, beta_2=0.999, epsilon=1e-07, amsgrad=False, name="AdamW")
 
 checkpoint_seg = tf.keras.callbacks.ModelCheckpoint(filepath=segmentation_checkpoint,
                                                  save_weights_only=True,
@@ -53,15 +55,26 @@ checkpoint_brixia = tf.keras.callbacks.ModelCheckpoint(filepath=brixia_checkpoin
 
 def custom_loss(y_true,y_pred):
     alpha=0.7
-    tf.keras
+    y_true_expanded = tf.expand_dims(y_true,axis=-1)
 
-    LossMAE = tf.losses.mean_absolute_error(tf.expand_dims(y_true,axis=-1),tf.expand_dims(tf.math.argmax(y_pred,axis=-1),axis=-1))
+    y_pred_sum = tf.multiply(y_pred,np.array([0,1,2,3]))
+    calcY_pred = tf.expand_dims(tf.reduce_sum(y_pred_sum,axis=-1),axis=-1)
+
+    LossMAE = tf.losses.mean_absolute_error(y_true_expanded,calcY_pred)
+    
     lossCrossEntropy = tf.losses.sparse_categorical_crossentropy(y_true,y_pred )
-    weightLossMAE = tf.multiply(1.0-alpha, tf.cast(LossMAE,tf.float32))
+    weightLossMAE = tf.multiply(1.-alpha, tf.cast(LossMAE,tf.float32))
     weightCrossEntropy = tf.multiply(lossCrossEntropy,alpha)
     return tf.add(weightLossMAE,weightCrossEntropy)
 
 alpha=0.7
-brixia_model.compile(optimizer=adam,loss=custom_loss,metrics=["acc"])#,tf.keras.metrics.MeanIoU(num_classes=2) ])
-brixia_model.fit(x=DSBrixiaTrain,validation_data=DSBrixiaTest ,epochs=10,steps_per_epoch=10,validation_steps=10,callbacks=[checkpoint_brixia])
-brixia_model.evaluate(x=DSBrixiaTest)
+
+brixia_model.compile(optimizer=adam,loss=tf.keras.losses.SparseCategoricalCrossentropy() ,metrics=["acc"])#,tf.keras.metrics.MeanIoU(num_classes=2) ])
+brixia_model.fit(x=DSBrixiaTrain,validation_data=DSBrixiaTest,steps_per_epoch = int(4698*0.8)//8, validation_steps = int(4698*0.2)//8,epochs=100,callbacks=[checkpoint_brixia])
+brixia_model.evaluate(x=DSBrixiaTest,steps= int(4698*0.2)//8)
+
+#for batch in DSBrixiaTest:
+#    print(batch[0].shape,batch[1].shape)
+#    prediction = np.argmax(brixia_model.predict(batch[0]),axis=-1)
+#    for i in range(len(prediction)):
+#        print(prediction[i],batch[1][i])

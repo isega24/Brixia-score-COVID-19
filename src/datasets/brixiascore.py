@@ -75,7 +75,9 @@ def get_data_iterator(target_size=512, test_size=0.25, random_state=23,preproces
         img = tfio.image.decode_dicom_image(image_bytes)
         img = (img-tf.reduce_min(img))/(tf.reduce_max(img)-tf.reduce_min(img))
         img = equalize(img)*256
-        return tf.image.resize(img, [img_height, img_width])
+        img = tf.image.resize(img, [img_height, img_width])
+        print(img.shape)
+        return img
 
 
     DSTrain.shuffle(buffer_size=BUFFER_SIZE)
@@ -84,6 +86,53 @@ def get_data_iterator(target_size=512, test_size=0.25, random_state=23,preproces
     DSTest = DSTest.map(lambda x_,y_: (decode_img(x_)[0,:,:],y_))
     DSTrain = DSTrain.batch(BATCH_SIZE)
     DSTest = DSTest.batch(BATCH_SIZE)
+
+    DSTrain = tf.data.Dataset.repeat(DSTrain)
+    DSTest = tf.data.Dataset.repeat(DSTest)
+
+    
+    return DSTrain, DSTest
+
+
+def get_data_iterator_png(target_size=512, test_size=0.25, random_state=23,preprocessing=True, label_type='region',file_csv="data/public-annotations.csv",data_directory="data/public-cohen-subset"):
+    assert label_type in ['global', 'region'], print("label_type must be either 'global' or 'region'.")
+    # load annotations from csv
+    ds = pd.read_csv(file_csv,sep=";",dtype=str)
+    X = []
+    y = []
+    for it in tqdm(ds.itertuples()):
+        imageFile = f"{data_directory}/{it.Filename}".replace(".dcm",".png")
+        brixia_txt = str(it.BrixiaScore)
+        brixia = np.array([int(b) for b in str(brixia_txt)])
+        bs = np.reshape(brixia,(2,3)).T
+        X.append(imageFile)
+        y.append(bs)
+    
+    XTrain, XTest, YTrain, YTest = train_test_split(X, y, test_size=test_size, random_state=random_state)
+    
+
+    DSTrain = tf.data.Dataset.from_tensor_slices((XTrain,YTrain))
+    DSTest = tf.data.Dataset.from_tensor_slices((XTest,YTest))
+    def decode_img(img_path):
+        img_ = tf.io.read_file(img_path)
+        img_ = tf.image.decode_jpeg(img_,channels=1)
+        
+        # img = dcmread(img_path)
+        img_ = (img_-tf.reduce_min(img_))/(tf.reduce_max(img_)-tf.reduce_min(img_))
+        img_ = equalize(img_)*256
+        img_ = tf.image.resize(img_, [img_height, img_width])
+        return img_
+
+    DSTrain = DSTrain.map(lambda x_,y_: (decode_img(x_),y_))
+    DSTest = DSTest.map(lambda x_,y_: (decode_img(x_),y_))
+    
+    DSTrain.shuffle(buffer_size=BUFFER_SIZE)
+    DSTest.shuffle(buffer_size=BUFFER_SIZE)
+    DSTrain = DSTrain.batch(BATCH_SIZE)
+    DSTest = DSTest.batch(BATCH_SIZE)
+
+    DSTrain = tf.data.Dataset.repeat(DSTrain)
+    DSTest = tf.data.Dataset.repeat(DSTest)
 
     
     return DSTrain, DSTest
